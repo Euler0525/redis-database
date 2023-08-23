@@ -2,54 +2,35 @@ package main
 
 import (
 	"fmt"
-	"net"
 
 	"github.com/go-redis/redis"
 )
 
-// 定义一个全局变量，指向Redis客户端
 var rdb *redis.Client
 
-func initClient() error {
+func main() {
+	// 创建 Redis 客户端
 	rdb = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // 密码置空
 		DB:       0,  // 使用默认数据库
 	})
 
-	_, err := rdb.Ping().Result()
+	// 测试连接
+	pong, err := rdb.Ping().Result()
 	if err != nil {
-		return err
-	}
-
-	fmt.Println("Connected")
-
-	return nil
-}
-
-func main() {
-	err := initClient()
-	if err != nil {
-		fmt.Println("Failed to initialize Redis client:", err)
+		fmt.Println("Connect failed!", err)
 		return
 	}
+	fmt.Println("Connected to Redis:", pong)
 
-	// 监听本地端口6379
-	listener, err := net.Listen("tcp", "localhost:6379")
+	handleRequest("SET A B")
+	handleRequest("GET A")
+	handleRequest("DEL A")
+
+	// 关闭 Redis 连接
+	err = rdb.Close()
 	if err != nil {
-		fmt.Println("Error listening:", err)
-		return
+		fmt.Println("Failed to close connection:", err)
 	}
-	defer rdb.Close()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println("Error accepting connection:", err)
-			return
-		}
-
-		go handleConnection(conn)
-	}
-
 }

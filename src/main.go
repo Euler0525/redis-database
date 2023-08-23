@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/go-redis/redis"
 )
@@ -21,27 +22,10 @@ func initClient() error {
 		return err
 	}
 
+	fmt.Println("Connected")
+
 	return nil
 }
-
-// func main() {
-// 	err := initClient()
-// 	if err != nil {
-// 		fmt.Println("Failed to initialize Redis client:", err)
-// 		return
-// 	}
-// 	fmt.Println("Connected!")
-
-// 	// 在这里可以使用 rdb 进行各种 Redis 操作
-// 	// rdb.Get("key")、rdb.Set("key", "value") ...
-
-// 	// 关闭 Redis 连接
-// 	err = rdb.Close()
-// 	if err != nil {
-// 		fmt.Println("Failed to close Redis client:", err)
-// 		return
-// 	}
-// }
 
 func main() {
 	err := initClient()
@@ -49,14 +33,23 @@ func main() {
 		fmt.Println("Failed to initialize Redis client:", err)
 		return
 	}
+
+	// 监听本地端口6379
+	listener, err := net.Listen("tcp", "localhost:6379")
+	if err != nil {
+		fmt.Println("Error listening:", err)
+		return
+	}
 	defer rdb.Close()
 
-	fmt.Println("Connected!")
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection:", err)
+			return
+		}
 
-	value, err := getValue("myKey")
-	if err != nil {
-		fmt.Println("Error:", err)
-	} else {
-		fmt.Println("Value:", value)
+		go handleConnection(conn)
 	}
+
 }

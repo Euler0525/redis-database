@@ -5,107 +5,136 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 )
 
-// 数据存储结构
-var data = make(map[string]string)
-var mutex sync.RWMutex
+type Database struct {
+	data map[string]string
+}
 
-func handleConnection(conn net.Conn, wg *sync.WaitGroup) {
-	defer wg.Done() // 并发编程：新任务减一
+func NewDatabase() *Database {
+	return &Database{
+		data: make(map[string]string),
+	}
+}
 
-	fmt.Printf("新连接来自 %s...\n", conn.RemoteAddr().String())
+func (db *Database) Get(key string) string {
+	return db.data[key]
+}
 
-	// 创建读写缓冲区
+func (db *Database) Set(key, value string) {
+	db.data[key] = value
+}
+
+func (db *Database) Delete(key string) {
+	delete(db.data, key)
+}
+
+type RedisServer struct {
+	db *Database
+}
+
+func NewRedisServer() *RedisServer {
+	return &RedisServer{
+		db: NewDatabase(),
+	}
+}
+
+func (s *RedisServer) handleConnection(conn net.Conn) {
+	defer conn.Close()
+
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 
-	// 处理连接
 	for {
-		// 读取客户端发送的命令
 		command, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Printf("读取命令时出错: %s\n", err)
+			fmt.Printf("读取指令时出错: %s\n", err)
 			return
 		}
 
-		// 去除命令中的换行符
 		command = strings.TrimSpace(command)
 
-		// 解析命令和参数
 		parts := strings.Split(command, " ")
-		cmd := strings.ToLower(parts[0]) // 请求指令
-		args := parts[1:]                // 指令参数
+		cmd := strings.ToLower(parts[0])
+		args := parts[1:]
 
-		// 执行命令
 		switch cmd {
 		case "ping":
-			response := "PONG\n"
+			response := "+PONG\r\n"
 			writer.WriteString(response)
-			writer.Flush()
 		case "echo":
-			response := strings.Join(args, " ") + "\n"
+			if len(args) < 1 {
+				response := "客户端ECHO指令格式错误！\r\n"
+				writer.WriteString(response)
+				continue
+			}
+
+			response := fmt.Sprintf("+%s\r\n", strings.Join(args, " "))
 			writer.WriteString(response)
-			writer.Flush()
+		case "get":
+			if len(args) != 1 {
+				response := "客户端GET指令格式错误！\r\n"
+				writer.WriteString(response)
+				continue
+			}
+
+			key := args[0]
+			value := s.db.Get(key)
+
+			if value != "" {
+				response := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+				writer.WriteString(response)
+			} else {
+				response := "$-1\r\n"
+				writer.WriteString(response)
+			}
 		case "set":
 			if len(args) != 2 {
-				response := "ERROR: wrong number of arguments for 'SET' command\n"
+				response := "客户端SET指令格式错误！\r\n"
 				writer.WriteString(response)
-				writer.Flush()
 				continue
 			}
 
 			key := args[0]
 			value := args[1]
 
-			mutex.Lock()
-			data[key] = value
-			mutex.Unlock()
+			s.db.Set(key, value)
 
-			response := "OK\n"
+			response := "+OK\r\n"
 			writer.WriteString(response)
-			writer.Flush()
-		case "get":
-			if len(args) != 1 {
-				response := "ERROR: wrong number of arguments for 'GET' command\n"
+		case "del":
+			if len(args) < 1 {
+				response := "客户端DEL指令格式错误！\r\n"
 				writer.WriteString(response)
-				writer.Flush()
 				continue
 			}
 
-			key := args[0]
+			count := 0
 
-			mutex.RLock()
-			value, ok := data[key]
-			mutex.RUnlock()
-
-			if ok {
-				response := value + "\n"
-				writer.WriteString(response)
-			} else {
-				response := "(nil)\n"
-				writer.WriteString(response)
+			for _, key := range args {
+				if _, ok := s.db.data[key]; ok {
+					s.db.Delete(key)
+					count++
+				}
 			}
 
-			writer.Flush()
+			response := fmt.Sprintf(":%d\r\n", count)
+			writer.WriteString(response)
 		case "quit":
-			fmt.Printf("连接断开: %s\n", conn.RemoteAddr().String())
-			conn.Close()
+			fmt.Println("连接断开……")
 			return
 		default:
-			response := "ERROR: unknown command\n"
+			response := "未知指令！\r\n"
 			writer.WriteString(response)
-			writer.Flush()
 		}
+
+		writer.Flush()
 	}
 }
 
 func main() {
-	// 监听地址和端口
 	address := "localhost:6379"
 
-	// 创建TCP监听器
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		fmt.Printf("无法绑定到地址 %s: %s\n", address, err)
@@ -114,10 +143,8 @@ func main() {
 
 	fmt.Printf("正在监听地址 %s\n", address)
 
-	// 创建等待所有连接完成的等待组
-	var wg sync.WaitGroup
+	server := NewRedisServer()
 
-	// 接受连接并处理
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -125,13 +152,6 @@ func main() {
 			continue
 		}
 
-		// 增加等待组计数
-		wg.Add(1)
-
-		// 在单独的goroutine中处理连接
-		go handleConnection(conn, &wg)
+		go server.handleConnection(conn)
 	}
-
-	// 等待所有连接完成
-	wg.Wait()
 }

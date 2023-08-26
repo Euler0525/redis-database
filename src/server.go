@@ -7,151 +7,101 @@ import (
 	"strings"
 )
 
-type Database struct {
-	data map[string]string
-}
+// 定义一个全局的键值对存储
+var data = make(map[string]string)
 
-func NewDatabase() *Database {
-	return &Database{
-		data: make(map[string]string),
+func main() {
+	// 监听本地端口6379
+	listener, err := net.Listen("tcp", ":6379")
+	if err != nil {
+		fmt.Println("监听失败！", err.Error())
+		return
+	}
+	defer listener.Close()
+	fmt.Println("正在监听端口: 6379")
+
+	// 接收客户端连接
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Println("连接失败: ", err.Error())
+			return
+		}
+
+		go handleConnection(conn)
 	}
 }
 
-func (db *Database) Get(key string) string {
-	return db.data[key]
-}
-
-func (db *Database) Set(key, value string) {
-	db.data[key] = value
-}
-
-func (db *Database) Delete(key string) {
-	delete(db.data, key)
-}
-
-type RedisServer struct {
-	db *Database
-}
-
-func NewRedisServer() *RedisServer {
-	return &RedisServer{
-		db: NewDatabase(),
-	}
-}
-
-func (s *RedisServer) handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 
 	for {
-		command, err := reader.ReadString('\n')
+		// 读取客户端发送的命令
+		cmd, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Printf("读取指令时出错: %s\n", err)
+			fmt.Println("读取指令时出错: ", err.Error())
 			return
 		}
 
-		command = strings.TrimSpace(command)
+		// 处理命令
+		result := processCommand(cmd)
 
-		parts := strings.Split(command, " ")
-		cmd := strings.ToLower(parts[0])
-		args := parts[1:]
-
-		switch cmd {
-		case "ping":
-			response := "+PONG\r\n"
-			writer.WriteString(response)
-		case "echo":
-			if len(args) < 1 {
-				response := "客户端ECHO指令格式错误！\r\n"
-				writer.WriteString(response)
-				continue
-			}
-
-			response := fmt.Sprintf("+%s\r\n", strings.Join(args, " "))
-			writer.WriteString(response)
-		case "get":
-			if len(args) != 1 {
-				response := "客户端GET指令格式错误！\r\n"
-				writer.WriteString(response)
-				continue
-			}
-
-			key := args[0]
-			value := s.db.Get(key)
-
-			if value != "" {
-				response := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
-				writer.WriteString(response)
-			} else {
-				response := "$-1\r\n"
-				writer.WriteString(response)
-			}
-		case "set":
-			if len(args) != 2 {
-				response := "客户端SET指令格式错误！\r\n"
-				writer.WriteString(response)
-				continue
-			}
-
-			key := args[0]
-			value := args[1]
-
-			s.db.Set(key, value)
-
-			response := "+OK\r\n"
-			writer.WriteString(response)
-		case "del":
-			if len(args) < 1 {
-				response := "客户端DEL指令格式错误！\r\n"
-				writer.WriteString(response)
-				continue
-			}
-
-			count := 0
-
-			for _, key := range args {
-				if _, ok := s.db.data[key]; ok {
-					s.db.Delete(key)
-					count++
-				}
-			}
-
-			response := fmt.Sprintf(":%d\r\n", count)
-			writer.WriteString(response)
-		case "quit":
-			fmt.Println("连接断开……")
+		// 发送结果给客户端
+		_, err = writer.WriteString(result + "\n")
+		if err != nil {
+			fmt.Println("响应错误！", err.Error())
 			return
-		default:
-			response := "未知指令！\r\n"
-			writer.WriteString(response)
 		}
-
 		writer.Flush()
 	}
 }
 
-func main() {
-	address := "localhost:6379"
+func processCommand(cmd string) string {
+	cmd = strings.TrimSuffix(cmd, "\n")
+	// 解析命令和参数
+	parts := strings.Split(cmd, " ")
+	command := strings.ToUpper(parts[0])
+	args := parts[1:]
 
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		fmt.Printf("无法绑定到地址 %s: %s\n", address, err)
-		return
-	}
-
-	fmt.Printf("正在监听地址 %s\n", address)
-
-	server := NewRedisServer()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Printf("接受连接时出错: %s\n", err)
-			continue
+	// 执行命令
+	switch command {
+	case "PING":
+		return "PONG"
+	case "ECHO":
+		return strings.Join(args, " ")
+	case "SET":
+		if len(args) != 2 {
+			return "SET 参数数量错误！"
 		}
-
-		go server.handleConnection(conn)
+		key := args[0]
+		value := args[1]
+		data[key] = value
+		return "OK"
+	case "GET":
+		if len(args) != 1 {
+			return "GET 参数数量错误！"
+		}
+		// 获取键值对
+		key := args[0]
+		value, ok := data[key]
+		if !ok {
+			return "NIL"
+		}
+		return value
+	case "DEL":
+		if len(args) != 1 {
+			return "DEL 参数数量错误！"
+		}
+		// 删除键值对
+		key := args[0]
+		delete(data, key)
+		return "OK"
+	case "QUIT":
+		return "断开连接..."
+	default:
+		return fmt.Sprintf("未知指令: '%s'", command)
 	}
 }

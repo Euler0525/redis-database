@@ -7,11 +7,11 @@ import (
 	"strings"
 )
 
-// 定义一个全局的键值对存储
+// 全局变量：用于键值对存储
 var data = make(map[string]string)
 
 func main() {
-	// 监听本地端口6379
+	// 监听 TCP 连接本地端口6379
 	listener, err := net.Listen("tcp", ":6379")
 	if err != nil {
 		fmt.Println("监听失败！", err.Error())
